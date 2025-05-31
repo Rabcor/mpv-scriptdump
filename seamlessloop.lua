@@ -1,7 +1,7 @@
 local options = {
-	autoloop_duration = 60,		-- Seconds (1 min)
+	autoloop_duration = 60,		-- Seconds (1 min) set to 0 to disable
 	seamlessloop = true,		-- Enable filter based seamless looping
-	allowseek = true			-- Allow seeking (seeking breaks seamless looping).
+	allowseek = true		-- Allow seeking (seeking breaks seamless looping).
 	}
 	
 mp.options = require "mp.options"
@@ -31,8 +31,11 @@ function seamlessloop(loop_property, looping)
 end
 
 function autoloop(looping)
+	if options.autoloop_duration == 0 then
+		return
+	end
 	local duration = mp.get_property_native("duration")
-    local frames = mp.get_property("container-fps") * duration
+	local frames = mp.get_property("container-fps") * duration
 	if not options.seamlessloop then -- try to make the normal looping seamless, helps a lot but doesn't always work.
 		mp.command("no-osd vf set @seamlessloop:loop=-1")
 		mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
