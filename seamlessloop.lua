@@ -1,81 +1,150 @@
+-- Does not work with losslessly concatenated files (h264/hevc in mp4 at least)
+-- If on hwdec use copyback for optimal results (hwdec=auto-copy)
+-- TODO: Find a way to detect concatenated files and disable functionalityo n those files.
+
 local options = {
-	autoloop_duration = 60,		-- Seconds (1 min) set to 0 to disable
+	autoloop_duration = 60,		-- Seconds (1 min)
 	seamlessloop = true,		-- Enable filter based seamless looping
-	allowseek = true		-- Allow seeking (seeking breaks seamless looping).
+	allowsoftseamless = true,	-- Even when seamless looping is disabled, try to make looping seamless with a softer approach when applicable
+	allowseek = true			-- Allow seeking (seeking breaks seamless looping).
 	}
 	
 mp.options = require "mp.options"
 mp.options.read_options(options)
 local maxaudio = 2.14748e+09
+local maxframes = 32767
+local duration = 0
+local frames = 0
+local cpuaccess = false
+local looping = nil
+local time = 0.0
+local lasttime = 0.0
+local seamlessmode = false
+local seekbuffer = 0.05 -- Expected delay between executions
+local allowreset = true
 
-function seamlessloop(loop_property, looping)
-	if not looping then
+function disableseamless()
+	local filters = mp.get_property("vf") .. mp.get_property("af") 
+	if string.match(filters,"seamlessloop") then
 		mp.command("no-osd vf remove @seamlessloop")
     	mp.command("no-osd af remove @seamlessloop")
-    	return
-	elseif not options.seamlessloop then
+    end
+  if string.match(mp.get_property("lavfi-complex"), "loop") then
+  	mp.set_property("lavfi-complex", "[vid1]null[vo]")
+  end
+end
+
+function softseamless()
+	if not options.allowsoftseamless then
 		return
 	end
-	local duration = mp.get_property_native("duration")
-	local frames = 32767
+	if cpuaccess then
+		mp.command("no-osd vf set @seamlessloop:loop=-1")
+		--mp.command("no-osd af set @seamlessloop:aloop=-1")
+	else			
+		mp.set_property("lavfi-complex", "[vid1]loop=-1[vo]")
+		--mp.command("no-osd af set @seamlessloop:aloop=-1")
+	end
+	seamlessmode = false
+end
+
+function update()
+	local hwdec = mp.get_property("hwdec-current")
+	if hwdec ~= nil then
+		if string.match(hwdec, "copy") or hwdec == "no" then
+			cpuaccess = true
+		else
+			cpuaccess = false
+		end
+	else
+		hwdec = mp.get_property("hwdec")
+		if string.match(hwdec, "copy") or hwdec == "no" then
+			cpuaccess = true
+		else
+			cpuaccess = false
+		end
+	end
+	looping = mp.get_property_native("loop-file")
+	duration = mp.get_property_native("duration")
 	if mp.get_property("container-fps") ~= nil then
-    	frames = math.ceil(mp.get_property("container-fps") * duration)
-    end
-	if looping and frames < 32767 then
-		mp.command("no-osd seek 0 absolute")
-		mp.command("no-osd vf set @seamlessloop:loop=-1:size=" .. frames)
-		mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio) 
-	elseif frames > 32767 then
-		mp.osd_message("File is too long for seamless looping, falling back to normal looping")
+    	frames = math.ceil(mp.get_property("container-fps") * duration) -- Not sure if this really matters
+	else
+		frames = maxframes
+	end
+	time = mp.get_property_native("time-pos")
+	seamlessmode = string.match(mp.get_property("vf"), '@seamlessloop.loop.-1.size')
+	if not seamlessmode then
+		seamlessmode = string.match(mp.get_property("lavfi-complex"), "loop.-1.size")
+	end
+	if time == nil then
+		time = 0.000
 	end
 end
 
-function autoloop(looping)
+function seamlessloop(loop_property, status)
+	update()
+	looping = status
+	if not looping then
+		disableseamless()
+    	return
+	elseif not options.seamlessloop then
+		return
+	elseif frames > maxframes then
+		return
+	elseif seamlessmode then
+		return
+	end
+	if looping and frames <= maxframes then
+		if allowreset then
+			allowreet = false
+			mp.command("no-osd seek 0 absolute")
+		end
+		if cpuaccess then
+			mp.command("no-osd vf set @seamlessloop:loop=-1:size=" .. frames)
+			mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
+		else
+
+			mp.set_property("lavfi-complex", string.format("[vid1]loop=-1:size=%d[vo]", frames))
+			mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
+		end
+	end
+end
+
+function autoloop()
 	if options.autoloop_duration == 0 then
 		return
 	end
-	local duration = mp.get_property_native("duration")
-	local frames = mp.get_property("container-fps") * duration
-	if not options.seamlessloop then -- try to make the normal looping seamless, helps a lot but doesn't always work.
-		mp.command("no-osd vf set @seamlessloop:loop=-1")
-		mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
-	end
+	
     -- Cancel operation if there is no file duration
     if not duration then
     	mp.set_property_native("loop-file", false)
         return
     end
-
     -- Loops file if was_loop is false, and file meets requirements
     if not looping and duration <= options.autoloop_duration then
         mp.set_property_native("loop-file", true)
         mp.set_property_bool("file-local-options/save-position-on-quit", false)
-        -- Unloops file if was_loop is true, and file does not meet requirements
+		if not options.seamlessloop then -- try to mitigate pause at end of loops, doesn't always work.
+			mp.command("no-osd seek 0 absolute")
+			softseamless()
+		end
     elseif looping and duration > options.autoloop_duration then
         mp.set_property_native("loop-file", false)
+    elseif looping then
+    	if not options.seamlessloop then -- try to mitigate pause at end of loops, doesn't always work.
+			mp.command("no-osd seek 0 absolute")
+			softseamless()
+		end
     end
 end
 
--- Disable loop filter on seek. Restore it when starting over. Called on playback-restart.
-function recover()
-		local looping = mp.get_property_native("loop-file")
-		local time = tonumber(mp.get_property("time-pos")) 
-		local seamlessmode = string.match(mp.get_property("vf"), '@seamlessloop.loop.-1.size')
-		if time == 0.0 and looping then
-			if not seamlessmode  and options.seamlessloop then
-				seamlessloop("loop-file", looping)
-			end
-		elseif time > 0.1 and looping then	-- Disable on seek. We could instead seek to start, set loop=-1 (no size) then seek back to the desired time, however it only savees u like 1/10 times so not worth the hassle.
-			mp.command("no-osd vf remove @seamlessloop")
-    		mp.command("no-osd af remove @seamlessloop")
-		end
-		if time > 0.1 and not options.allowseek then
-			seamlessloop("loop-file", looping)
-		end
-end
-
 function initialize()
-	autoloop(mp.get_property_native("loop-file"))
+	disableseamless()
+	update()
+	if duration <= options.autoloop_duration then
+		mp.command("no-osd seek 0 absolute")
+	end
+	autoloop(looping)
 	-- This is how we hijack the loop function in mpv and toggle seamless looping in tandem with it.
 	mp.observe_property("loop-file", "native", seamlessloop)
 	mp.observe_property("loop", "native", seamlessloop)
@@ -83,4 +152,22 @@ end
 
 mp.register_event("file-loaded", initialize)
 
-mp.register_event("playback-restart", recover)
+mp.register_event("playback-restart", function() 
+	update()
+	if math.abs(time - lasttime) < seekbuffer or not looping then
+		return
+	elseif options.seamlessloop then
+		if not options.allowseek then
+			disableseamless()
+			allowreset = true
+			seamlessloop("loop-file", looping)
+		elseif time < seekbuffer and not seamlessmode then
+			seamlessloop("loop-file", looping)
+		else
+			disableseamless()
+			softseamless()
+		end
+	end
+	update()
+	lasttime = time
+end)
