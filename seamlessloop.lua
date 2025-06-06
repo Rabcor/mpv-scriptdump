@@ -103,7 +103,6 @@ function seamlessloop(loop_property, status)
 			mp.command("no-osd vf set @seamlessloop:loop=-1:size=" .. frames)
 			mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
 		else
-
 			mp.set_property("lavfi-complex", string.format("[vid1]loop=-1:size=%d[vo]", frames))
 			mp.command("no-osd af set @seamlessloop:aloop=-1:size=" .. maxaudio)
 		end
@@ -161,7 +160,8 @@ mp.register_event("playback-restart", function()
 			disableseamless()
 			allowreset = true
 			seamlessloop("loop-file", looping)
-		elseif time < seekbuffer and not seamlessmode then
+		elseif time < seekbuffer * 2 then
+			allowreset = true
 			seamlessloop("loop-file", looping)
 		else
 			disableseamless()
