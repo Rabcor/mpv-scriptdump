@@ -1,12 +1,13 @@
 -- Does not work with losslessly concatenated files (h264/hevc in mp4 at least)
 -- If on hwdec use copyback for optimal results (hwdec=auto-copy)
--- TODO: Find a way to detect concatenated files and disable functionalityo n those files.
+-- TODO: Find a way to detect concatenated files and disable functionality on those files.
 
 local options = {
 	autoloop_duration = 60,		-- Seconds (1 min)
 	seamlessloop = true,		-- Enable filter based seamless looping
 	allowsoftseamless = true,	-- Even when seamless looping is disabled, try to make looping seamless with a softer approach when applicable
-	allowseek = true			-- Allow seeking (seeking breaks seamless looping).
+	allowseek = true,			-- Allow seeking (seeking breaks seamless looping).
+	ignoresubtitled = true		-- Disable seamless looping for videos with softsubs (seamless looping breaks the subs).
 	}
 	
 mp.options = require "mp.options"
@@ -16,11 +17,12 @@ local maxframes = 32767
 local duration = 0
 local frames = 0
 local cpuaccess = false
+local subtitles = false
 local looping = nil
 local time = 0.0
 local lasttime = 0.0
 local seamlessmode = false
-local seekbuffer = 0.05 -- Expected delay between executions
+local seekbuffer = 0.05 -- Expected delay between executions, if you have a slow cpu you may need to increase this.
 local allowreset = true
 
 function disableseamless()
@@ -49,6 +51,9 @@ function softseamless()
 end
 
 function update()
+	if tonumber(mp.get_property("sub")) then
+		subtitles = true
+	end
 	local hwdec = mp.get_property("hwdec-current")
 	if hwdec ~= nil then
 		if string.match(hwdec, "copy") or hwdec == "no" then
@@ -87,6 +92,8 @@ function seamlessloop(loop_property, status)
 	if not looping then
 		disableseamless()
     	return
+    elseif subtitles and options.ignoresubtitled then
+    	return
 	elseif not options.seamlessloop then
 		return
 	elseif frames > maxframes then
@@ -114,12 +121,11 @@ function autoloop()
 		return
 	end
 	
-    -- Cancel operation if there is no file duration
     if not duration then
     	mp.set_property_native("loop-file", false)
         return
     end
-    -- Loops file if was_loop is false, and file meets requirements
+
     if not looping and duration <= options.autoloop_duration then
         mp.set_property_native("loop-file", true)
         mp.set_property_bool("file-local-options/save-position-on-quit", false)
