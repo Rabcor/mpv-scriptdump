@@ -103,7 +103,7 @@ function seamlessloop(loop_property, status)
 	end
 	if looping and frames <= maxframes then
 		if allowreset then
-			allowreet = false
+			allowrset = false
 			mp.command("no-osd seek 0 absolute")
 		end
 		if cpuaccess then
